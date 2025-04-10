@@ -45,3 +45,4 @@ class ProfileData(models.Model):
         """Save method for UsedSensors."""
 
         super().save(*args, **kwargs)    
+        

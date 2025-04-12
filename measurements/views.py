@@ -1,12 +1,10 @@
 
 
+from collections import defaultdict
 import tempfile
 import ctd
 import gsw
-import numpy as np
 import pandas as pd
-from sklearn.metrics import r2_score
-from scipy.optimize import curve_fit
 from datetime import datetime
 from rest_framework import status,viewsets
 from rest_framework.response import Response
@@ -16,7 +14,7 @@ from  metadata.models import QualityFactors
 from  variables.models import Variables
 from .serializers import CombinedDataSerializer, MeasurementsSerializer, ProfileDataSerializer, StationNameSerializer
 from .utils import extract_information
-from .calculateClyna import halocline, picnocline, thermocline
+from .services.oceangrafy import Structures
 
 # Create your views here.
 
@@ -202,12 +200,15 @@ class MeasurementsAndTeos(viewsets.ViewSet):
                             'density': round(gsw.sigma0(sal, temp_value), 2)
                         })
             else:
-                for depth in depths:
-                    entry_data = {'depth': depth}
-                    for var in variables_request:
-                        values_at_depth = [entry['value'] for entry in variable_data.get(var, []) if entry['depth_marker'] == depth]
-                        entry_data[var] = values_at_depth if values_at_depth else None
-                    data.append(entry_data)
+                depth_data = defaultdict(dict)
+                for var_name, entries in variable_data.items():
+                    for entry in entries:
+                        depth_data[entry['depth_marker']][var_name] = entry['value']
+                
+                data = [
+                    {'depth': depth, **{var: depth_data[depth].get(var) for var in variable_names}}
+                    for depth in sorted(depth_data.keys())
+                ]
                         
             response_status = status.HTTP_200_OK if data else status.HTTP_204_NO_CONTENT
             message = "Data retrieved successfully" if response_status == status.HTTP_200_OK else "No data found for the given parameters"
@@ -239,10 +240,7 @@ class MeasurementsFilterStation(viewsets.ViewSet):
             coordinates=Measurements.objects.filter(name=station_name).values('latitude','longitude')
 
             for entry in coordinates:
-                 coordinates_data={
-                      'latitude':entry['latitude'],
-                      'longitude':entry['longitude']
-                      }
+                 coordinates_data={'latitude':entry['latitude'],'longitude':entry['longitude']}
 
             variables = Variables.objects.filter(name__in=variables_names, sensor__measurement__name=station_name)
 
@@ -258,71 +256,46 @@ class MeasurementsFilterStation(viewsets.ViewSet):
                 variable_name, depth, value = entry['variable__name'], entry['depth_marker'], entry['variable_value']
                 variable_data[variable_name].append({'depth_marker': depth, 'value': value})
 
-            depths = sorted({entry['depth_marker'] for entries in variable_data.values() for entry in entries})
-
-            for depth in depths:
-                entry_data = {'depth': depth}
-                for var in variables_names:
-                    values_at_depth = [entry['value'] for entry in variable_data.get(var, []) if entry['depth_marker'] == depth]
-                    entry_data[var] = values_at_depth[0] if values_at_depth else None
-                data.append(entry_data)
-
+            depth_data = defaultdict(dict)
+            for var_name, entries in variable_data.items():
+                for entry in entries:
+                    depth_data[entry['depth_marker']][var_name] = entry['value']
             
+            data = [
+                {'depth': depth, **{var: depth_data[depth].get(var) for var in variables_names}}
+                for depth in sorted(depth_data.keys())
+            ]
 
             if 'Temperature' in variables_names and 'Salinity' in variables_names:
                 df = pd.DataFrame(data).rename(columns={
-                           'depth': 'pres',
-                           'Salinity': 'SP',
-                           'Temperature': 't'
-                     }).sort_values(by='pres').dropna(subset=['pres', 'SP', 't']).reset_index(drop=True)
-
-                lon,lat =coordinates_data['latitude'],coordinates_data['longitude']
+                    'depth':'pres',
+                    'Salinity':'SP',
+                    'Temperature':'t'
+                }).sort_values(by='pres').dropna(subset=['pres', 'SP', 't']).reset_index(drop=True)
             
-
+                lon, lat = coordinates_data['latitude'], coordinates_data['longitude']
                 if lat is None or lon is None:
                     return Response({'error': 'Se requiere latitud y longitud para calcular SA y CT'}, status=status.HTTP_400_BAD_REQUEST)
-                
-                try:
-                    df['SA'] = gsw.SA_from_SP(df['SP'].values, df['pres'].values, lon, lat)
-                    df['CT'] = gsw.CT_from_t(df['SA'].values, df['t'].values, df['pres'].values)
-                    df['sigma0'] = gsw.sigma0(df['SA'],df['CT'])
-                    
+            
+                result =Structures(df, lat, lon)
 
-                    print(df['CT'])
-                
-                    df = df.rename(columns={
-                        'SA': 'asal',
-                        'CT': 'ctemp'
-                       
-                    })
-                   
-                    
-                    pres_mtd, temp_mtd, pres_mld, temp_mld, r2, _, _, _ = thermocline(df)
-                    inicio_haloclina, fin_haloclina, modelo= halocline(df)
-                    inicio_picnoclina, fin_picnoclina, modelo=picnocline(df)
-
-                    print(f'prof_inicial:{inicio_haloclina},final:{fin_haloclina}')
-                    print(f'prof_ini_pic:{inicio_picnoclina},prof_fin_pic:{fin_picnoclina}')
-                
-                except Exception as e:
-                    print("Error en cálculo de SA/CT:", e)
-                    pres_mtd = temp_mtd = pres_mld = temp_mld = r2 = None
-                    
-
+                if result:
+                    thermocline_data, halocline_data, picnocline_data = result['thermocline'],result['halocline'],result['picnocline']
+                else:
+                    thermocline_data = None
+                    halocline_data = None
+                    picnocline_data = None
+                            
             response_status = status.HTTP_200_OK if any(entry.get(var) for entry in data for var in variables_names) else status.HTTP_204_NO_CONTENT
             message = "Datos recuperados con éxito" if response_status == status.HTTP_200_OK else "No se encontraron datos para los parámetros proporcionados"
 
             return Response({
-                "coordinates":coordinates_data,
+                "coordinates": coordinates_data,
                 "data": CombinedDataSerializer(data, many=True).data,
-                "thermocline_model": {
-                    "pres_mtd": pres_mtd,
-                    "temp_mtd": temp_mtd,
-                    "pres_mld": pres_mld,
-                    "temp_mld": temp_mld,
-                    "r2": r2,
-                    
-                } if pres_mld is not None else None,
+                "thermocline": thermocline_data,
+                "halocline": halocline_data,
+                "picnocline": picnocline_data
+                
             }, status=response_status)
         except Exception as e:
             return Response({'error': f'Ocurrió un error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

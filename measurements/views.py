@@ -5,6 +5,8 @@ import tempfile
 import ctd
 import gsw
 import pandas as pd
+import numpy as np
+from scipy.interpolate import griddata
 from datetime import datetime
 from rest_framework import status,viewsets
 from rest_framework.response import Response
@@ -12,7 +14,7 @@ from rest_framework.decorators import action
 from .models import Measurements, ProfileData
 from  metadata.models import QualityFactors
 from  variables.models import Variables
-from .serializers import CombinedDataSerializer, MeasurementsSerializer, ProfileDataSerializer, StationNameSerializer
+from .serializers import CombinedDataSerializer, MeasurementsSerializer, ProfileDataSerializer, SectionDataResponseSerializer, StationNameSerializer
 from .utils import extract_information
 from .services.oceangrafy import Structures
 
@@ -265,33 +267,6 @@ class MeasurementsFilterStation(viewsets.ViewSet):
                 {'depth': depth, **{var: depth_data[depth].get(var) for var in variables_names}}
                 for depth in sorted(depth_data.keys())
             ]
-
-            thermocline_data = None
-            halocline_data = None
-            picnocline_data = None
-            
-
-            #if 'Temperature' in variables_names and 'Salinity' in variables_names:
-            #    df = pd.DataFrame(data).rename(columns={
-            #        'depth':'pres',
-            #        'Salinity':'SP',
-            #        'Temperature':'t'
-            #    }).sort_values(by='pres').dropna(subset=['pres', 'SP', 't']).reset_index(drop=True)
-#
-            #    
-            #    lon, lat = coordinates_data['latitude'], coordinates_data['longitude']
-            #    if lat is None or lon is None:
-            #        return Response({'error': 'Se requiere latitud y longitud para calcular SA y CT'}, status=status.HTTP_400_BAD_REQUEST)
-            #
-            #    result =Structures(df, lat, lon)
-#
-            #    if result:
-            #        thermocline_data, halocline_data, picnocline_data = result['thermocline'],result['halocline'],result['picnocline']
-            #    else:
-            #        thermocline_data = None
-            #        halocline_data = None
-            #        picnocline_data = None
-                    
                             
             response_status = status.HTTP_200_OK if any(entry.get(var) for entry in data for var in variables_names) else status.HTTP_204_NO_CONTENT
             message = "Datos recuperados con éxito" if response_status == status.HTTP_200_OK else "No se encontraron datos para los parámetros proporcionados"
@@ -299,10 +274,6 @@ class MeasurementsFilterStation(viewsets.ViewSet):
             return Response({
                 "coordinates": coordinates_data,
                 "data": CombinedDataSerializer(data, many=True).data,
-                #"thermocline": thermocline_data,
-                #"halocline": halocline_data,
-                #"picnocline": picnocline_data
-                
             }, status=response_status)
         except Exception as e:
             return Response({'error': f'Ocurrió un error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -354,8 +325,6 @@ class CalculateStructureStation(viewsets.ViewSet):
             return Response({'error': f'Ocurrió un error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             
-
-
 class MeasurementsList(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='list')
     def get_stations_name(self, request):
@@ -366,5 +335,102 @@ class MeasurementsList(viewsets.ViewSet):
         except Exception as e:
             return Response({'error':'An error'},status=status.HTTP_500_INTERNAL_SERVER_ERROR)  
 
+class SeccionData(viewsets.ViewSet):
+    @action(detail=False, methods=['post'], url_path='section')
+    def get_seccion(self, request):
+        try:
+           variable_name = request.data.get('variable')
+           stations_names = request.data.get('stations_names', [])
+   
+           if not variable_name or not stations_names:
+               return Response({'error': 'Faltan datos: se requiere "variable" y "stations_names"'}, 
+                               status=status.HTTP_400_BAD_REQUEST)
+   
+           if isinstance(stations_names, str):
+               stations_names = [stations_names]
+   
+         
+           variables = Variables.objects.filter(
+               name=variable_name,
+               sensor__measurement__name__in=stations_names
+           )
+   
+           if not variables.exists():
+               return Response({'error': f'No se encontraron variables "{variable_name}" en las estaciones dadas.'}, 
+                               status=status.HTTP_404_NOT_FOUND)
+   
+          
+           profile_data = ProfileData.objects.filter(variable__in=variables).select_related('variable')
+   
+           
+           station_coords = {
+               m['name']: (m['latitude'], m['longitude'])
+               for m in Measurements.objects.filter(name__in=stations_names).values('name', 'latitude', 'longitude')
+           }
+   
+        
+           latitudes = []
+           depths = []
+           values = []
+   
+           for variable in variables:
+               station_name = variable.sensor.measurement.name
+               coords = station_coords.get(station_name)
 
+               print(coords)
+   
+               if not coords:
+                   continue 
+   
+               latitude_value = coords[0]
+   
+               station_profiles = profile_data.filter(variable=variable).values('depth_marker', 'variable_value')
+               profile_depths = np.array([entry['depth_marker'] for entry in station_profiles])
+               profile_values = np.array([entry['variable_value'] for entry in station_profiles])
+               profile_latitudes = np.full_like(profile_depths, fill_value=latitude_value, dtype=float)
+   
+               latitudes.append(profile_latitudes)
+               depths.append(profile_depths)
+               values.append(profile_values)
+   
+           
+           if not latitudes:
+               return Response({'error': 'No se encontraron datos de perfil válidos.'}, status=status.HTTP_404_NOT_FOUND)
+   
+           all_latitudes = np.concatenate(latitudes)
+           all_depths = np.concatenate(depths)
+           all_values = np.concatenate(values)
+   
+           
+           grid_latitudes, grid_depths = np.meshgrid(
+               np.linspace(np.min(all_latitudes), np.max(all_latitudes), 400),
+               np.linspace(np.min(all_depths), np.max(all_depths), 2000)
+           )
+   
+         
+           grid_values = griddata(
+               (all_latitudes, all_depths),
+               all_values,
+               (grid_latitudes, grid_depths),
+               method='linear'
+           )
+   
+           grid_latitud=grid_latitudes[0]
+           grid_depth=grid_depths[:,0]
+           grid_values_clean = np.where(np.isnan(grid_values), None, grid_values)
+   
+           
+           data={
+               "x": grid_latitud.tolist(),
+               "y": grid_depth.tolist(),
+               "z": grid_values_clean.tolist()
+           }
 
+           response_serializer = SectionDataResponseSerializer(data=data)
+           response_serializer.is_valid(raise_exception=True)
+   
+           return Response({
+               "data": response_serializer.data,
+           }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': f'Ocurrió un error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

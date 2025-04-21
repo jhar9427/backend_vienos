@@ -2,7 +2,7 @@ from django.urls import include,path
 from rest_framework.routers import DefaultRouter
 
 from .views import MeasurementsView, ProfileDataView, UpFileloadCnv , \
-                   MeasurementFilterDepth, MeasurementsFilterStation, MeasurementsAndTeos, MeasurementsList, CalculateStructureStation
+                   MeasurementFilterDepth, MeasurementsFilterStation, MeasurementsAndTeos, MeasurementsList, CalculateStructureStation,SeccionData
 
 
 router=DefaultRouter()
@@ -14,6 +14,7 @@ router.register(r'filter',MeasurementsAndTeos,basename='variables_teos')
 router.register(r'filter', MeasurementsFilterStation, basename='filter_station')
 router.register(r'filter', CalculateStructureStation, basename='calculate_structure')
 router.register(r'station',MeasurementsList,basename='measurements_list')
+router.register(r'filter',SeccionData,basename='seccion_data')
 
 urlpatterns = [
     path('',include(router.urls)),

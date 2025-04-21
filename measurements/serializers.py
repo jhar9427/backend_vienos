@@ -33,3 +33,19 @@ class CombinedDataSerializer(serializers.Serializer):
 
 class StationNameSerializer(serializers.Serializer):
     name=serializers.CharField()   
+
+class SectionDataResponseSerializer(serializers.Serializer):
+    x = serializers.ListField(
+        child=serializers.FloatField(),
+        help_text="Lista de valores de latitud o distancia"
+    )
+    y = serializers.ListField(
+        child=serializers.FloatField(),
+        help_text="Lista de profundidades"
+    )
+    z = serializers.ListField(
+        child=serializers.ListField(
+            child=serializers.FloatField(allow_null=True)
+        ),
+        help_text="Matriz de valores interpolados"
+    )    

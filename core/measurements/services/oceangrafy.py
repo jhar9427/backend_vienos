@@ -20,7 +20,7 @@ def Structures(df, lat, lon):
                 "temp_mtd": temp_mtd,
                 "pres_mld": pres_mld,
                 "temp_mld": temp_mld,
-                "r2": r2
+                #"r2": r2
             },
             "halocline": {
                 "start": start_halocline,

@@ -169,14 +169,9 @@ def thermocline(df, m_precision=0.01, threshold=0.2):
 
 
 def halocline(df, n_segmentos=5):
-    """
-    Detecta la haloclina mediante ajuste por tramos lineales.
-    Retorna los puntos de ruptura (inicio y fin) y el modelo ajustado.
-    """
-    profundidad = df['pres'].values
-    salinidad = df['asal'].values  # Asume que ya es SA
 
-    # Suavizado interno opcional
+    profundidad = df['pres'].values
+    salinidad = df['asal'].values 
     salinidad_smooth = savgol_filter(salinidad, window_length=11, polyorder=2)
 
     modelo = pwlf.PiecewiseLinFit(profundidad, salinidad_smooth)
@@ -190,16 +185,10 @@ def halocline(df, n_segmentos=5):
         raise ValueError("No se pudo identificar la haloclina.")
 	
 def picnocline(df, n_segmentos=5):
-    """
-    Detecta la picnoclina mediante ajuste por tramos lineales.
-    Retorna los puntos de ruptura (inicio y fin) y el modelo ajustado.
-    """
+
     profundidad = df['pres'].values
     densidad = df['sigma0'].values
-
-    # Suavizado opcional (si los datos son muy ruidosos, descomenta)
     densidad_smooth = savgol_filter(densidad, window_length=11, polyorder=2)
-    # modelo = pwlf.PiecewiseLinFit(profundidad, densidad_smooth)
 
     modelo = pwlf.PiecewiseLinFit(profundidad, densidad_smooth)
     breakpoints = modelo.fit(n_segmentos)

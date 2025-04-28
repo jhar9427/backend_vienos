@@ -32,4 +32,37 @@ class CombinedDataSerializer(serializers.Serializer):
     
 
 class StationNameSerializer(serializers.Serializer):
-    name=serializers.CharField()   
+    name = serializers.CharField()
+
+class ThermoclineSerializer(serializers.Serializer):
+    pres_mtd = serializers.FloatField(required=True)
+    temp_mtd = serializers.FloatField(required=True)
+    pres_mld = serializers.FloatField(required=True)
+    temp_mld = serializers.FloatField(required=True)
+    # Si en el futuro quieres agregar "r2", simplemente lo descomentas
+    # r2 = serializers.FloatField(required=False)
+
+class HaloclineSerializer(serializers.Serializer):
+    start = serializers.FloatField(required=True)
+    end = serializers.FloatField(required=True)
+
+class PicnoclineSerializer(serializers.Serializer):
+    start = serializers.FloatField(required=True)
+    end = serializers.FloatField(required=True)
+    
+    
+class SectionDataResponseSerializer(serializers.Serializer):
+    x = serializers.ListField(
+        child=serializers.FloatField(),
+        help_text="Lista de valores de latitud o distancia"
+    )
+    y = serializers.ListField(
+        child=serializers.FloatField(),
+        help_text="Lista de profundidades"
+    )
+    z = serializers.ListField(
+        child=serializers.ListField(
+            child=serializers.FloatField(allow_null=True)
+        ),
+        help_text="Matriz de valores interpolados"
+    )    
